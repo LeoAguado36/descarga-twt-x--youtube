@@ -1,93 +1,51 @@
-import yt_dlp
-import imageio_ffmpeg as ffmpeg
-import tkinter as tk
-from tkinter import scrolledtext, filedialog, BooleanVar
-import flet as ft
-import streamlit as st
+from flask import Flask, render_template, request, jsonify, Response
+import downloader as py
 import threading
-import os
 
-# Obtener la ruta de ffmpeg desde imageio_ffmpeg
-FFMPEG_PATH = ffmpeg.get_ffmpeg_exe()
+app = Flask(__name__)
 
-# -----------------------------
-# FUNCIONES GENERALES PARA DESCARGA
-# -----------------------------
-def obtener_info_video(url):
-    """Obtiene información del video sin descargarlo."""
-    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        return ydl.extract_info(url, download=False)
+# Definir globalmente progress_queue
+progress_queue = []
 
-def seleccionar_carpeta(permitir_subcarpeta=True):
-    """Abre el explorador de archivos para elegir una carpeta y crea una subcarpeta 'Video' si es necesario."""
-    path = filedialog.askdirectory()
-    if not path:
-        return None
+# Función para enviar el progreso de la descarga
+def progress_callback(d):
+    if d['status'] == 'downloading':
+        # Calculamos el porcentaje de progreso
+        progress = d.get('downloaded_bytes', 0) / d.get('total_bytes', 1) * 100
+        # Agregar el progreso a la cola para que el endpoint lo pueda transmitir
+        progress_queue.append(f"data:{progress:.2f}\n\n")
+    elif d['status'] == 'done':  # Cuando la descarga termine
+        progress_queue.append("data:100.00\n\n")  # Aseguramos que llegue el 100% al final
+        progress_queue.append("data:Download complete\n\n")  # Enviamos el mensaje de "descarga completa"
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# Este endpoint es el encargado de emitir el progreso en tiempo real
+@app.route('/api/progress', methods=['GET'])
+def get_progress():
+    def generate():
+        while not progress_queue:
+            # Esperamos hasta que haya algo en el progreso (es decir, que se haya iniciado la descarga)
+            pass
+        # Emitimos los datos del progreso
+        for data in progress_queue:
+            yield data
+    return Response(generate(), content_type='text/event-stream')
+
+# Endpoint para manejar la solicitud de descarga y pasar el callback
+@app.route('/api/data', methods=['POST'])
+def received_data():
+    link = request.get_json()
+    link_url = link['name']
     
-    if permitir_subcarpeta:
-        path = os.path.join(path, "Video")
-        os.makedirs(path, exist_ok=True)  # Crea la carpeta solo si no existe
+    # Usamos un hilo para descargar el video y pasar el callback de progreso
+    threading.Thread(target=py.download_video, args=(link_url, progress_callback)).start()
 
-    return path
+    if "data:100.00\n\n" in progress_queue:
+        # Enviamos una respuesta inicial
+        return jsonify({'received_data': 'Descarga de video completa'})
 
-def download_video(url, formato, log_callback, path):
-    """Descarga el video y fusiona audio/video si es necesario."""
-    def progress_hook(d):
-        if d["status"] == "downloading":
-            log_callback(f"Descargando... {d['_percent_str']} ({d['_eta_str']} restantes)\n")
-        elif d["status"] == "finished":
-            log_callback("\nDescarga completa. Fusionando video y audio...\n")
-
-    ydl_opts = {
-        "format": f"{formato}+bestaudio/best",
-        "outtmpl": os.path.join(path, "%(title)s.%(ext)s"),
-        "progress_hooks": [progress_hook],
-        "ffmpeg_location": FFMPEG_PATH,
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4"
-        }]
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    log_callback("\n✅ Video listo!\n")
-
-# -----------------------------
-# INTERFAZ STREAMLIT
-# -----------------------------
-def streamlit_ui():
-    st.title("YouTube Downloader - Streamlit")
-    url = st.text_input("URL del video")
-
-    if url:
-        info = obtener_info_video(url)
-        formatos = {
-            f["format_id"]: f.get("format_note", "N/A")
-            for f in info["formats"]
-            if f.get("vcodec") != "none" or f.get("acodec") != "none"
-        }
-        formato = st.selectbox("Selecciona un formato", list(formatos.keys()), format_func=lambda x: formatos[x])
-
-        # Preguntar dónde guardar el archivo
-        path = st.text_input("Ruta donde guardar el archivo", value=os.getcwd())
-        crear_subcarpeta = st.checkbox("Crear carpeta 'Video'", value=True)
-
-        if st.button("Descargar"):
-            if not os.path.isdir(path):
-                st.error("❌ Ruta no válida")
-            else:
-                if crear_subcarpeta:
-                    path = os.path.join(path, "Video")
-                    os.makedirs(path, exist_ok=True)
-                
-                st.text("Descargando... espera un momento")
-                download_video(url, formato, lambda d: st.text(d), path)
-
-# -----------------------------
-# EJECUTAR INTERFAZ
-# -----------------------------
-if _name_ == "_main_":
-    streamlit_ui()  # Para probar Streamlit
+if __name__ == '__main__':
+    app.run(debug=True)

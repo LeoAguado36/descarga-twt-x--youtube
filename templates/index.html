@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Descargar video</title>
+    <script>
+        function sender_data() {
+            // Mostrar mensaje de inicio de descarga
+            document.getElementById('response').innerText = "Descargando video, espere...";
+            const data = {name: document.getElementById('name').value};
+
+            // Realizamos la petición POST
+            fetch('http://127.0.0.1:5000/api/data', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+            })
+            .then(response => {
+                // Ahora que la descarga comenzó, nos suscribimos al evento de progreso
+                const eventSource = new EventSource('http://127.0.0.1:5000/api/progress');
+
+                // Manejamos los mensajes del servidor (porcentaje de descarga)
+                eventSource.onmessage = function(e) {
+                    // Si el mensaje contiene "Download complete", se muestra el mensaje final
+                    if (e.data === "Download complete") {
+                        document.getElementById('response').innerText = "Descarga Completa";
+                        eventSource.close();  // Cerramos la conexión de eventos
+                    } else {
+                        document.getElementById('progress').innerText = `Progreso: ${e.data}%`;
+                    }
+                };
+
+                // Cuando la conexión se cierre (la descarga esté completa)
+                eventSource.onclose = function() {
+                    // Esto se asegura de que el mensaje "Descarga Completa" se muestra al final
+                    console.log("La conexión de progreso se cerró.");
+                };
+            })
+            .catch(error => {
+                document.getElementById('response').innerText = "Hubo un error al descargar el video.";
+            });
+        }
+    </script>
+</head>
+<body>
+
+    <h2>Descargar video</h2>
+    <input type="text" id="name" placeholder="Coloque la URL de YouTube">
+    <button onclick="sender_data()">Descargar video</button>
+    <p id="response"></p> <!-- Muestra el estado de la descarga -->
+    <p id="progress"></p> <!-- Muestra el porcentaje de progreso -->
+
+</body>
+</html>
